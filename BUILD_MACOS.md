@@ -1,5 +1,12 @@
 # Building the macOS app
 
+> **Just want the app?** Download the latest `ADBFileExplorer-<version>-macos.zip`
+> from the [Releases page](https://github.com/rasyeda/adb-file-explorer-mac/releases),
+> unzip, and move `ADB File Explorer.app` to `/Applications`. See "First launch"
+> below for the one-time Gatekeeper step. Every `v*` tag is built automatically
+> by `.github/workflows/release.yml`.
+
+
 This has to be run **on a Mac** — `py2app` produces a native bundle tied to
 the machine's Python/Qt binaries, so it can't be cross-built from Linux.
 

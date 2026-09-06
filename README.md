@@ -51,6 +51,14 @@ External `adb` vs Python `adb-shell`
 
 ## 3. Install
 
+### macOS: prebuilt app
+
+Grab `ADBFileExplorer-<version>-macos.zip` from the
+[Releases page](https://github.com/rasyeda/adb-file-explorer-mac/releases),
+unzip it, and move `ADB File Explorer.app` into `/Applications`. First launch
+is Gatekeeper-blocked (unsigned): right-click the app → **Open** → **Open**.
+See [BUILD_MACOS.md](BUILD_MACOS.md) to build it yourself.
+
 ### 3.1 Prerequisites
 
 Installing and preparing Python (if not already installed)
