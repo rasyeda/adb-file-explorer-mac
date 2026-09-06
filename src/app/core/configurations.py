@@ -22,7 +22,7 @@ def resource_filename(package: str, resource: str) -> str:
 
 
 class Application(metaclass=Singleton):
-    __version__ = '1.4.0'
+    __version__ = os.environ.get('ADBFE_VERSION', '1.5.0').lstrip('v') or '1.5.0'
     __author__ = 'Azat Aldeshov'
 
     def __init__(self):

@@ -26,6 +26,9 @@ sys.path.insert(0, SRC)
 
 APP = ["mac_main.py"]
 
+# Version: overridable by CI from the git tag (e.g. tag "v1.5.0" -> "1.5.0").
+VERSION = os.environ.get("ADBFE_VERSION", "1.5.0").lstrip("v") or "1.5.0"
+
 ICONFILE = os.path.join(HERE, "AppIcon.icns")
 HAS_ICON = os.path.isfile(ICONFILE)
 
@@ -54,8 +57,8 @@ OPTIONS = {
             "CFBundleName": "ADB File Explorer",
             "CFBundleDisplayName": "ADB File Explorer",
             "CFBundleIdentifier": "com.aldeshov.adbfileexplorer",
-            "CFBundleVersion": "1.4.0",
-            "CFBundleShortVersionString": "1.4.0",
+            "CFBundleVersion": VERSION,
+            "CFBundleShortVersionString": VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "10.14",
             "NSHumanReadableCopyright": "Copyright (C) 2025 Azat Aldeshov. GPLv3.",
@@ -66,6 +69,7 @@ OPTIONS = {
 setup(
     app=APP,
     name="ADB File Explorer",
+    version=VERSION,
     options=OPTIONS,
     setup_requires=["py2app"],
 )

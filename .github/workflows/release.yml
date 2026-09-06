@@ -1,0 +1,73 @@
+name: Build macOS app
+
+# Build a standalone .app on every version tag and publish it as a
+# downloadable asset on the matching GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (without leading v), e.g. 1.5.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="${{ github.event.inputs.version }}"
+          fi
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "Building version $V"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install py2app
+
+      - name: Generate app icon
+        run: |
+          chmod +x make_icon.sh
+          ./make_icon.sh
+
+      - name: Build .app
+        env:
+          ADBFE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          rm -rf build dist
+          python setup.py py2app
+
+      - name: Package
+        id: package
+        run: |
+          V="${{ steps.version.outputs.value }}"
+          cd dist
+          ZIP="ADBFileExplorer-${V}-macos.zip"
+          # ditto preserves the bundle's symlinks / permissions / resource forks
+          ditto -c -k --sequesterRsrc --keepParent "ADB File Explorer.app" "$ZIP"
+          echo "path=dist/$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          name: v${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: ${{ steps.package.outputs.path }}
