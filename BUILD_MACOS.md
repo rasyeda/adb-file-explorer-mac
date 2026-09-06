@@ -4,10 +4,11 @@ This has to be run **on a Mac** — `py2app` produces a native bundle tied to
 the machine's Python/Qt binaries, so it can't be cross-built from Linux.
 
 ## 1. Prerequisites
-- Xcode Command Line Tools: `xcode-select --install` (if not already installed)
-- Python 3.9–3.11 (PyQt5 5.15 wheels don't have builds for very new Python
-  versions yet — if `pip install` fails on requirements.txt, install 3.11 via
-  `brew install python@3.11` and use that instead of your system Python)
+- Xcode (or the Xcode Command Line Tools: `xcode-select --install`)
+- Python 3.9–3.13. `requirements.txt` is currently pinned to releases that
+  ship wheels for Python 3.13 (`PyQt5 5.15.11`, `cryptography 50.x`, …). If
+  you're on an older Python and a pin fails to install, relax that line to a
+  version your interpreter has a wheel for.
 - Android SDK platform-tools installed somewhere, so a real `adb` exists on
   disk (Android Studio installs this automatically). You don't need Android
   Studio itself, just `adb`.
@@ -69,6 +70,6 @@ python setup.py py2app
 - **App opens then instantly quits**: run the binary directly from Terminal
   to see the real traceback:
   `"dist/ADB File Explorer.app/Contents/MacOS/ADB File Explorer"`
-- **PyQt5 install fails on your Python version**: PyQt5 5.15.x wheels stop
-  around Python 3.11. Use `brew install python@3.11` and rebuild the venv
-  with that interpreter.
+- **PyQt5 install fails on your Python version**: newer Python may need a
+  newer `PyQt5` than the pin in `requirements.txt` — bump it to the latest
+  `5.15.x` (which has 3.13 wheels), or use an older interpreter.
