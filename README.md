@@ -15,6 +15,8 @@ Features:
 * Connect via IP (TCP)
 * Listing / Pulling / Pushing files
 * Renaming and Deleting files
+* Filter the current folder by name (`Ctrl+F`) and sort by name / permissions /
+  size / date (click a column header); `F5` refreshes
 * Browsing app-private data (`/data/data/<package>`) on non-rooted devices —
   the package list is synthesized from `pm list packages` and each app is
   opened with `run-as`, so it works for apps installed from a **debuggable**
