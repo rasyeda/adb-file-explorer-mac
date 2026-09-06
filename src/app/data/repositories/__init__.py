@@ -30,6 +30,20 @@ class FileRepository:
             return android_adb.FileRepository.rename(file, name)
 
     @classmethod
+    def copy(cls, file: File, destination: str) -> (str, str):
+        if Adb.core == Adb.PYTHON_ADB_SHELL:
+            return python_adb.FileRepository.copy(file, destination)
+        elif Adb.core == Adb.EXTERNAL_TOOL_ADB:
+            return android_adb.FileRepository.copy(file, destination)
+
+    @classmethod
+    def move(cls, file: File, destination: str) -> (str, str):
+        if Adb.core == Adb.PYTHON_ADB_SHELL:
+            return python_adb.FileRepository.move(file, destination)
+        elif Adb.core == Adb.EXTERNAL_TOOL_ADB:
+            return android_adb.FileRepository.move(file, destination)
+
+    @classmethod
     def open_file(cls, file: File) -> (str, str):
         if Adb.core == Adb.PYTHON_ADB_SHELL:
             return python_adb.FileRepository.open_file(file)

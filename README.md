@@ -14,7 +14,7 @@ Features:
 * List of adb devices
 * Connect via IP (TCP)
 * Listing / Pulling / Pushing files
-* Renaming and Deleting files
+* Renaming, Deleting, Copying and Moving files (on-device)
 * Filter the current folder by name (`Ctrl+F`) and sort by name / permissions /
   size / date (click a column header); `F5` refreshes
 * Browsing app-private data (`/data/data/<package>`) on non-rooted devices —

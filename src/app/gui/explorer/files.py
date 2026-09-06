@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt, QPoint, QModelIndex, QAbstractListModel, QVariant, 
 from PyQt5.QtGui import QPixmap, QColor, QPalette, QKeySequence
 from PyQt5.QtWidgets import QMenu, QAction, QMessageBox, QFileDialog, QStyle, QWidget, QStyledItemDelegate, \
     QStyleOptionViewItem, QApplication, QListView, QVBoxLayout, QLabel, QSizePolicy, QHBoxLayout, QTextEdit, \
-    QMainWindow, QLineEdit, QShortcut
+    QMainWindow, QLineEdit, QShortcut, QInputDialog
 
 
 def natural_sort_key(text: str) -> list:
@@ -522,11 +522,11 @@ class FileExplorerWidget(QWidget):
         menu.addSection("Actions")
 
         action_copy = QAction('Copy to...', self)
-        action_copy.setDisabled(True)
+        action_copy.triggered.connect(self.copy_to)
         menu.addAction(action_copy)
 
         action_move = QAction('Move to...', self)
-        action_move.setDisabled(True)
+        action_move.triggered.connect(self.move_to)
         menu.addAction(action_move)
 
         action_rename = QAction('Rename', self)
@@ -632,6 +632,42 @@ class FileExplorerWidget(QWidget):
         dir_name = QFileDialog.getExistingDirectory(self, 'Download to', '~')
         if dir_name:
             self.download_files(dir_name)
+
+    def copy_to(self):
+        self.__transfer_selected(move=False)
+
+    def move_to(self):
+        self.__transfer_selected(move=True)
+
+    def __transfer_selected(self, move: bool):
+        selected = list(self.files or [])
+        if not selected:
+            return
+
+        verb = 'Move' if move else 'Copy'
+        destination, ok = QInputDialog.getText(
+            self, '%s to' % verb,
+            'Destination folder on the device:',
+            QLineEdit.Normal, Adb.manager().path()
+        )
+        if not ok or not destination:
+            return
+
+        method = FileRepository.move if move else FileRepository.copy
+        for file in selected:
+            data, error = method(file, destination)
+            if error:
+                Global().communicate.notification.emit(
+                    MessageData(
+                        timeout=10000, title=verb,
+                        body=str(error), message_type=MessageType.ERROR_MESSAGE,
+                    )
+                )
+            elif data:
+                Global().communicate.notification.emit(
+                    MessageData(timeout=10000, title=verb, body=data)
+                )
+        Global().communicate.files__refresh.emit()
 
     def download_files(self, destination: str = None):
         for file in self.files:

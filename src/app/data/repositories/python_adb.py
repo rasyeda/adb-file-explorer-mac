@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import posixpath
 import shlex
 from typing import List
 
@@ -157,6 +158,45 @@ class FileRepository:
         except BaseException as error:
             logging.exception("Unexpected error=%s, type(error)=%s" % (error, type(error)))
             return None, error
+
+    @classmethod
+    def __transfer(cls, file: File, destination: str, move: bool) -> (str, str):
+        if not PythonADBManager.device:
+            return None, "No device selected!"
+        if not PythonADBManager.device.available:
+            return None, "Device not available!"
+        if not destination or not destination.startswith('/'):
+            return None, "Enter an absolute destination path (starting with '/')."
+
+        source = file.path
+        target = posixpath.join(posixpath.normpath(destination), file.name)
+        if posixpath.normpath(source) == posixpath.normpath(target):
+            return None, "Source and destination are the same."
+
+        try:
+            dest_dir = posixpath.normpath(destination)
+            check = PythonADBManager.device.shell(
+                shlex.join(['sh', '-c', 'test -d %s && echo OK' % shlex.quote(dest_dir)])
+            )
+            if not check or 'OK' not in check:
+                return None, "Destination folder '%s' does not exist on the device." % dest_dir
+
+            args = [ShellCommand.MV] if move else [ShellCommand.CP, '-r']
+            response = PythonADBManager.device.shell(shlex.join(args + [source, target]))
+            if response:
+                return None, response
+            return "%s '%s' to '%s'" % ('Moved' if move else 'Copied', source, target), None
+        except BaseException as error:
+            logging.exception("Unexpected error=%s, type(error)=%s" % (error, type(error)))
+            return None, error
+
+    @classmethod
+    def copy(cls, file: File, destination: str) -> (str, str):
+        return cls.__transfer(file, destination, move=False)
+
+    @classmethod
+    def move(cls, file: File, destination: str) -> (str, str):
+        return cls.__transfer(file, destination, move=True)
 
     class UpDownHelper:
         def __init__(self, callback: callable):

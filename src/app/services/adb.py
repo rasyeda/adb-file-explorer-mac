@@ -45,6 +45,7 @@ class ShellCommand:
     LS_VERSION = [LS, '--version']
 
     CP = 'cp'
+    CP_RECURSIVE = [CP, '-r']
     MV = 'mv'
     RM = 'rm'
     RM_DIR = [RM, '-r']

@@ -180,6 +180,66 @@ class FileRepository:
         return None, response.ErrorData or response.OutputData
 
     @classmethod
+    def __transfer(cls, file: File, destination: str, move: bool) -> (str, str):
+        """Copy or move ``file`` into the device directory ``destination``."""
+        if not ADBManager.get_device():
+            return None, "No device selected!"
+        if not destination or not destination.startswith('/'):
+            return None, "Enter an absolute destination path (starting with '/')."
+
+        verb = "Move" if move else "Copy"
+        done = "Moved" if move else "Copied"
+        source = file.path
+        target = posixpath.join(ADBManager.clear_path(destination), file.name)
+        if posixpath.normpath(source) == posixpath.normpath(target):
+            return None, "Source and destination are the same."
+
+        base = [adb.ShellCommand.MV] if move else adb.ShellCommand.CP_RECURSIVE
+        args = base + [source, target]
+
+        src_ctx = sandbox_context(source)
+        dst_ctx = sandbox_context(target)
+        device_id = ADBManager.get_device().id
+
+        dest_dir = ADBManager.clear_path(destination)
+        check = [shlex.join(['sh', '-c', 'test -d %s' % shlex.quote(dest_dir)])]
+        if dst_ctx and not dst_ctx.is_root:
+            exists = adb.shell_run_as(device_id, dst_ctx.package, check).IsSuccessful
+        else:
+            exists = adb.shell(device_id, check).IsSuccessful
+        if not exists:
+            return None, "Destination folder '%s' does not exist on the device." % dest_dir
+
+        if not src_ctx and not dst_ctx:
+            response = adb.shell(device_id, [shlex.join(args)])
+        elif (
+            src_ctx and dst_ctx
+            and not src_ctx.is_root and not dst_ctx.is_root
+            and src_ctx.package == dst_ctx.package
+        ):
+            response = adb.shell_run_as(device_id, src_ctx.package, [shlex.join(args)])
+        else:
+            return None, (
+                "%s between an app's private data and another location isn't "
+                "supported over adb — use Download and then Upload instead." % verb
+            )
+
+        if not response.IsSuccessful or response.OutputData:
+            hint = response.ErrorData or response.OutputData
+            if src_ctx and not src_ctx.is_root:
+                hint = run_as_hint(src_ctx.package, hint)
+            return None, hint
+        return "%s '%s' to '%s'" % (done, source, target), None
+
+    @classmethod
+    def copy(cls, file: File, destination: str) -> (str, str):
+        return cls.__transfer(file, destination, move=False)
+
+    @classmethod
+    def move(cls, file: File, destination: str) -> (str, str):
+        return cls.__transfer(file, destination, move=True)
+
+    @classmethod
     def open_file(cls, file: File) -> (str, str):
         args = [adb.ShellCommand.CAT, file.path]
         if file.isdir:
