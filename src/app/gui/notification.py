@@ -1,0 +1,243 @@
+# ADB File Explorer
+# Copyright (C) 2022  Azat Aldeshov
+from typing import Union
+
+from PyQt5 import QtGui, QtCore
+from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QAbstractAnimation, QObject
+from PyQt5.QtGui import QPaintEvent, QPainter
+from PyQt5.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QStyleOption, QStyle, \
+    QGraphicsDropShadowEffect, QVBoxLayout, QScrollArea, QSizePolicy, QFrame, QGraphicsOpacityEffect, QProgressBar
+
+from app.core.configurations import Resources
+from app.data.models import MessageType
+from app.helpers.tools import read_string_from_file
+from app.gui.widgets.circular_progress import CircularProgress
+
+
+class BaseMessage(QWidget):
+    def __init__(self, parent: QObject):
+        super(BaseMessage, self).__init__(parent)
+        # Object name to scope QSS to the root notification only
+        self.setObjectName("notification")
+        # Ensure style backgrounds are painted for this widget
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.notification_center = parent
+        self.header = QHBoxLayout()
+        self.body = QVBoxLayout(self)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(0)
+        self.body.addLayout(self.header)
+        self.setLayout(self.body)
+
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.opacity_effect.setOpacity(0.)
+        self.setGraphicsEffect(self.opacity_effect)
+
+        self.animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.animation.setDuration(200)
+        self.animation.setStartValue(0)
+        self.animation.setEndValue(1)
+
+        self.setStyleSheet(read_string_from_file(Resources.style_notification))
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setMinimumSize(self.sizeHint())
+        self.setMinimumHeight(80)
+        self.setFixedWidth(320)
+        self.show()
+
+    def paintEvent(self, event: QPaintEvent):
+        option = QStyleOption()
+        option.initFrom(self)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PrimitiveElement(), option, painter, self)
+        super().paintEvent(event)
+
+    def set_opacity(self, opacity):
+        self.opacity_effect.setOpacity(opacity)
+        if opacity == 1:
+            shadow_effect = QGraphicsDropShadowEffect(self)
+            shadow_effect.setBlurRadius(10)
+            shadow_effect.setOffset(1, 1)
+            self.setGraphicsEffect(shadow_effect)
+
+    def show(self):
+        self.animation.valueChanged.connect(self.set_opacity)
+        self.animation.setDirection(QAbstractAnimation.Forward)
+        self.animation.start()
+        return super().show()
+
+    def closeEvent(self, event: QtGui.QCloseEvent):
+        self.notification_center.remove(self)
+        self.deleteLater()
+        return event.accept()
+
+    def create_loading(self):
+        self._loading_spinner = CircularProgress(size=24, thickness=2, parent=self)
+        self._loading_spinner.setContentsMargins(5, 0, 0, 0)
+        self.header.addWidget(self._loading_spinner)
+        self._loading_spinner.start()
+
+    def create_title(self, text):
+        title = QLabel(text, self)
+        title.setObjectName("title")
+        title.setAlignment(Qt.AlignVCenter)
+        title.setContentsMargins(5, 0, 0, 0)
+        self.header.addWidget(title, 1)
+
+    def create_close(self):
+        button = QPushButton(self)
+        button.setObjectName("close")
+        button.setText('×')
+        button.setFixedSize(32, 32)
+        button.clicked.connect(lambda: self.close() or None)
+        self.header.addWidget(button)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent):
+        self.setMinimumHeight(self.height())
+        return event.accept()
+
+    def default_body_message(self, message):
+        body = QLabel(message, self)
+        body.setObjectName("body")
+        body.setWordWrap(True)
+        body.setContentsMargins(15, 5, 20, 10)
+        return body
+
+
+class LoadingMessage(BaseMessage):
+    def __init__(self, parent: QWidget, title: str, body: Union[QWidget, str] = None):
+        super(LoadingMessage, self).__init__(parent)
+
+        self.label = None
+        self.progress = None
+        self.create_loading()
+        self.create_title(title)
+        if not body:
+            self.label = QLabel("Waiting...", self)
+            self.label.setWordWrap(True)
+            self.label.setContentsMargins(10, 5, 10, 10)
+
+            self.progress = QProgressBar(self)
+            self.progress.setValue(0)
+            self.progress.setMaximumHeight(16)
+            self.progress.setAlignment(Qt.AlignCenter)
+
+            self.layout().addWidget(self.label)
+            self.layout().addWidget(self.progress)
+        elif isinstance(body, QWidget):
+            self.layout().addWidget(body)
+        elif isinstance(body, str):
+            self.layout().addWidget(self.default_body_message(body))
+
+    def update_progress(self, title: str, progress: int):
+        if self.label:
+            self.label.setText(title)
+        if self.progress:
+            self.progress.setValue(progress)
+
+
+class Message(BaseMessage):
+    def __init__(self, parent: QWidget, title: str, body: Union[QWidget, str], timeout=5000):
+        super(Message, self).__init__(parent)
+
+        self.create_title(title)
+        self.create_close()
+        if isinstance(body, QWidget):
+            self.layout().addWidget(body)
+        elif isinstance(body, str):
+            self.layout().addWidget(self.default_body_message(body))
+
+        if timeout >= 1000:
+            QTimer.singleShot(timeout, self.on_close)
+
+    def on_close(self):
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.animation.setDuration(100)
+        self.animation.setStartValue(1)
+        self.animation.setEndValue(0)
+        self.animation.valueChanged.connect(self.closing)
+        self.animation.setDirection(QAbstractAnimation.Forward)
+        self.animation.start()
+
+    def closing(self, opacity):
+        self.opacity_effect.setOpacity(opacity)
+        if opacity == 0:
+            self.close()
+
+
+class NotificationCenter(QScrollArea):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.notifications = QFrame(self)
+        self.notifications.setLayout(QVBoxLayout(self.notifications))
+        self.notifications.installEventFilter(self)
+        self.notifications.layout().setSpacing(5)
+        self.notifications.layout().addStretch()
+
+        self.setWidgetResizable(True)
+        self.setWidget(self.notifications)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.SubWindow)
+        self.setStyleSheet(read_string_from_file(Resources.style_notification_center))
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.verticalScrollBar().rangeChanged.connect(lambda x, y: self.verticalScrollBar().setValue(y))
+
+        self.setMinimumSize(355, 20)
+        self.update_position()
+        self.adjustSize()
+        self.show()
+
+    def eventFilter(self, obj: QtCore.QObject, event: Union[QtCore.QEvent, QtGui.QResizeEvent]) -> bool:
+        if obj == self.notifications and event.type() == event.Resize:
+            if self.maximumHeight() > self.rect().height() < event.size().height():
+                self.resize(self.rect().width(), event.size().height() + self.notifications.layout().spacing())
+
+        return super(NotificationCenter, self).eventFilter(obj, event)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent):
+        super(NotificationCenter, self).resizeEvent(event)
+        self.update_position()
+
+    def update_position(self):
+        geometry = self.geometry()
+        geometry.moveTopLeft(
+            QPoint(
+                self.parent().rect().width() - self.rect().width(),
+                self.parent().rect().height() - self.rect().height()
+            )
+        )
+        self.setGeometry(geometry)
+        self.setMaximumHeight(self.parent().rect().height())
+
+    def append_notification(self, title: str, body: Union[QWidget, str], timeout=0, message_type=MessageType.INFO_MESSAGE):
+        if message_type == MessageType.LOADING_MESSAGE:
+            message = LoadingMessage(self, title, body)
+            variant = 'loading'
+        elif message_type == MessageType.ERROR_MESSAGE:
+            message = Message(self, title, body, timeout)
+            variant = 'error'
+        else:
+            message = Message(self, title, body, timeout)
+            variant = 'message'
+
+        # Apply variant for QSS styling without hardcoded colors
+        message.setProperty('variant', variant)
+        # Repolish to apply dynamic property styling
+        style = message.style()
+        style.unpolish(message)
+        style.polish(message)
+
+        self.append(message)
+        return message
+
+    def append(self, message: BaseMessage):
+        self.notifications.layout().addWidget(message)
+        self.notifications.adjustSize()
+        self.update_position()
+
+    def remove(self, message: BaseMessage):
+        self.notifications.layout().removeWidget(message)
+        self.adjustSize()
+        self.update_position()
