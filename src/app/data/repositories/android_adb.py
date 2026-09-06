@@ -5,9 +5,17 @@ from typing import List
 from app.core.configurations import Settings
 from app.core.managers import ADBManager
 from app.data.models import FileType, Device, File
+from app.helpers.app_sandbox import (
+    PACKAGE_DIR_PERMISSIONS,
+    parse_packages,
+    run_as_hint,
+    sandbox_context,
+    synthetic_children,
+)
 from app.helpers.converters import convert_to_devices, convert_to_file, convert_to_file_list_a
 from app.helpers.tools import build_test_d_batch_script, parse_test_d_batch_output
 from app.services import adb
+import posixpath
 import shlex
 
 
@@ -18,9 +26,17 @@ class FileRepository:
             return None, "No device selected!"
 
         path = ADBManager.clear_path(path)
+
+        context = sandbox_context(path)
+        if context:
+            return cls.__sandbox_file(context)
+
         args = adb.ShellCommand.LS_LIST_DIRS + [path]
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
         if not response.IsSuccessful:
+            if synthetic_children(path) is not None:
+                return File(name=posixpath.basename(path), path=path,
+                            permissions=PACKAGE_DIR_PERMISSIONS), None
             return None, response.ErrorData or response.OutputData
 
         file = convert_to_file(response.OutputData.strip())
@@ -41,8 +57,21 @@ class FileRepository:
             return None, "No device selected!"
 
         path = ADBManager.path()
+
+        context = sandbox_context(path)
+        if context:
+            return cls.__sandbox_files(context, path)
+
         args = adb.ShellCommand.LS_ALL_LIST + [path]
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
+
+        known = synthetic_children(path)
+        if known and (not response.IsSuccessful or not response.OutputData):
+            return [
+                File(name=child, path=(path + child), permissions=PACKAGE_DIR_PERMISSIONS)
+                for child in known
+            ], None
+
         if not response.IsSuccessful and response.ExitCode != 1:
             return [], response.ErrorData or response.OutputData
 
@@ -74,12 +103,79 @@ class FileRepository:
                             f.link_type = FileType.DIRECTORY if status[p] else FileType.FILE
         return files, response.ErrorData
 
+    # ------------------------------------------------------------------
+    # App-private data (/data/data/<pkg>) support
+    #
+    # The shell user can't list /data/data on a production build, so mimic
+    # Android Studio's Device Explorer: synthesize the package listing from
+    # `pm list packages`, and read/write inside a package with `run-as`
+    # (works for apps installed from a debuggable build).
+    # ------------------------------------------------------------------
+    @classmethod
+    def __sandbox_file(cls, context) -> (File, str):
+        device_id = ADBManager.get_device().id
+        if context.is_root:
+            return File(
+                name=posixpath.basename(context.root),
+                path=context.root,
+                permissions=PACKAGE_DIR_PERMISSIONS,
+            ), None
+
+        args = adb.ShellCommand.LS_LIST_DIRS + [context.target]
+        response = adb.shell_run_as(device_id, context.package, [shlex.join(args)])
+        if not response.IsSuccessful:
+            if context.inner:
+                return None, run_as_hint(context.package, response.ErrorData or response.OutputData)
+            # Package dir itself: still show it as a folder so the user can see
+            # the "not debuggable" reason only when they try to open it.
+            return File(
+                name=context.package,
+                path=context.package_dir,
+                permissions=PACKAGE_DIR_PERMISSIONS,
+            ), None
+
+        file = convert_to_file((response.OutputData or '').strip())
+        if not file:
+            return None, "Unexpected string:\n%s" % response.OutputData
+        file.path = context.target
+        return file, None
+
+    @classmethod
+    def __sandbox_files(cls, context, path: str) -> (List[File], str):
+        device_id = ADBManager.get_device().id
+
+        if context.is_root:
+            response = adb.list_packages(device_id)
+            if not response.IsSuccessful:
+                return [], response.ErrorData or response.OutputData
+            files = [
+                File(name=package, path=(path + package), permissions=PACKAGE_DIR_PERMISSIONS)
+                for package in parse_packages(response.OutputData)
+            ]
+            return files, None
+
+        args = adb.ShellCommand.LS_ALL_LIST + [context.target]
+        response = adb.shell_run_as(device_id, context.package, [shlex.join(args)])
+        if not response.IsSuccessful and response.ExitCode != 1:
+            return [], run_as_hint(context.package, response.ErrorData or response.OutputData)
+        if not response.OutputData:
+            return [], response.ErrorData
+        return convert_to_file_list_a(response.OutputData, dirs=[], path=path), None
+
     @classmethod
     def rename(cls, file: File, name) -> (str, str):
         if name.__contains__('/') or name.__contains__('\\'):
             return None, "Invalid name"
 
         args = [adb.ShellCommand.MV, file.path, (file.location + name)]
+        context = sandbox_context(file.path)
+        if context and not context.is_root:
+            response = adb.shell_run_as(
+                ADBManager.get_device().id, context.package, [shlex.join(args)]
+            )
+            if not response.IsSuccessful:
+                return None, run_as_hint(context.package, response.ErrorData or response.OutputData)
+            return None, response.OutputData
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
         return None, response.ErrorData or response.OutputData
 
@@ -88,6 +184,14 @@ class FileRepository:
         args = [adb.ShellCommand.CAT, file.path]
         if file.isdir:
             return None, "Can't open. %s is a directory" % file.path
+        context = sandbox_context(file.path)
+        if context and not context.is_root:
+            response = adb.shell_run_as(
+                ADBManager.get_device().id, context.package, [shlex.join(args)]
+            )
+            if not response.IsSuccessful:
+                return None, run_as_hint(context.package, response.ErrorData or response.OutputData)
+            return response.OutputData, None
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
         if not response.IsSuccessful:
             return None, response.ErrorData or response.OutputData
@@ -98,6 +202,14 @@ class FileRepository:
         args = [adb.ShellCommand.RM, file.path]
         if file.isdir:
             args = adb.ShellCommand.RM_DIR_FORCE + [file.path]
+        context = sandbox_context(file.path)
+        if context and not context.is_root:
+            response = adb.shell_run_as(
+                ADBManager.get_device().id, context.package, [shlex.join(args)]
+            )
+            if not response.IsSuccessful or response.OutputData:
+                return None, run_as_hint(context.package, response.ErrorData or response.OutputData)
+            return "%s '%s' has been deleted" % ('Folder' if file.isdir else 'File', file.path), None
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
         if not response.IsSuccessful or response.OutputData:
             return None, response.ErrorData or response.OutputData
@@ -121,8 +233,25 @@ class FileRepository:
         if not destination:
             destination = Settings.device_downloads_path(ADBManager.get_device())
         if ADBManager.get_device() and source and destination:
+            device_id = ADBManager.get_device().id
+
+            context = sandbox_context(source)
+            if context and not context.is_root:
+                stat = adb.shell_run_as(
+                    device_id, context.package,
+                    [shlex.join(adb.ShellCommand.LS_LIST_DIRS + [source])]
+                )
+                if not stat.IsSuccessful:
+                    return None, run_as_hint(context.package, stat.ErrorData or stat.OutputData)
+                stat_file = convert_to_file((stat.OutputData or '').strip())
+                is_dir = bool(stat_file and stat_file.isdir)
+                response = adb.sandbox_pull(device_id, context.package, source, destination, is_dir)
+                if not response.IsSuccessful:
+                    return None, run_as_hint(context.package, response.ErrorData)
+                return response.OutputData, None
+
             helper = cls.UpDownHelper(progress_callback)
-            response = adb.pull(ADBManager.get_device().id, source, destination, helper.call)
+            response = adb.pull(device_id, source, destination, helper.call)
             if not response.IsSuccessful:
                 return None, response.ErrorData or "\n".join(helper.messages)
 
@@ -134,7 +263,18 @@ class FileRepository:
         if not ADBManager.get_device():
             return None, "No device selected!"
 
-        args = [adb.ShellCommand.MKDIR, (ADBManager.path() + name)]
+        target = ADBManager.path() + name
+        context = sandbox_context(ADBManager.path())
+        if context and not context.is_root:
+            response = adb.shell_run_as(
+                ADBManager.get_device().id, context.package,
+                [shlex.join([adb.ShellCommand.MKDIR, target])]
+            )
+            if not response.IsSuccessful:
+                return None, run_as_hint(context.package, response.ErrorData or response.OutputData)
+            return response.OutputData, None
+
+        args = [adb.ShellCommand.MKDIR, target]
         response = adb.shell(ADBManager.get_device().id, [shlex.join(args)])
         if not response.IsSuccessful:
             return None, response.ErrorData or response.OutputData
@@ -143,8 +283,17 @@ class FileRepository:
     @classmethod
     def upload(cls, progress_callback: callable, source: str) -> (str, str):
         if ADBManager.get_device() and ADBManager.path() and source:
+            device_id = ADBManager.get_device().id
+
+            context = sandbox_context(ADBManager.path())
+            if context and not context.is_root:
+                response = adb.sandbox_push(device_id, context.package, source, context.target)
+                if not response.IsSuccessful:
+                    return None, run_as_hint(context.package, response.ErrorData)
+                return response.OutputData, None
+
             helper = cls.UpDownHelper(progress_callback)
-            response = adb.push(ADBManager.get_device().id, source, ADBManager.path(), helper.call)
+            response = adb.push(device_id, source, ADBManager.path(), helper.call)
             if not response.IsSuccessful:
                 return None, response.ErrorData or "\n".join(helper.messages)
 

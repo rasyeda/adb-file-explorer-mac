@@ -1,5 +1,11 @@
 # ADB File Explorer
 # Copyright (C) 2022  Azat Aldeshov
+import os
+import posixpath
+import shlex
+import subprocess
+import tarfile
+
 from app.core.configurations import Settings
 from app.helpers.tools import CommonProcess
 
@@ -23,6 +29,8 @@ class Parameter:
     DISCONNECT = 'disconnect'
     START_SERVER = 'start-server'
     KILL_SERVER = 'kill-server'
+    EXEC_OUT = 'exec-out'
+    RUN_AS = 'run-as'
 
 
 class ShellCommand:
@@ -48,6 +56,8 @@ class ShellCommand:
     MKDIR = 'mkdir'
 
     CAT = 'cat'
+
+    PM_LIST_PACKAGES = ['pm', 'list', 'packages']
 
 
 def validate():
@@ -93,6 +103,106 @@ def shell(device_id: str, args: list):
     if RUN_AS_ROOT:
         return CommonProcess([ADB_PATH, Parameter.DEVICE, device_id, Parameter.ROOT] + args)
     return CommonProcess([ADB_PATH, Parameter.DEVICE, device_id, Parameter.SHELL] + args)
+
+
+def list_packages(device_id: str):
+    args = [ADB_PATH, Parameter.DEVICE, device_id, Parameter.SHELL] + ShellCommand.PM_LIST_PACKAGES
+    return CommonProcess(args)
+
+
+def shell_run_as(device_id: str, package: str, args: list):
+    """Run a shell command inside an app's sandbox via ``run-as <package>``.
+
+    Works only for apps installed from a debuggable build (same constraint as
+    Android Studio's Device Explorer). ``args`` is a list with a single already
+    shell-joined string, matching how ``shell()`` is called elsewhere.
+    """
+    prefix = [ADB_PATH, Parameter.DEVICE, device_id, Parameter.SHELL, Parameter.RUN_AS, package]
+    return CommonProcess(prefix + args)
+
+
+def _safe_extract(tar: tarfile.TarFile, dest_dir: str):
+    dest_root = os.path.realpath(dest_dir)
+    for member in tar:
+        member_path = os.path.realpath(os.path.join(dest_dir, member.name))
+        if member_path != dest_root and not member_path.startswith(dest_root + os.sep):
+            raise IOError("Blocked path traversal in archive member: %s" % member.name)
+    tar.extractall(dest_dir)
+
+
+class _Result:
+    """Minimal CommonProcess-shaped result for the sandbox transfer helpers."""
+
+    def __init__(self, ok: bool, output: str = None, error: str = None):
+        self.IsSuccessful = ok
+        self.OutputData = output
+        self.ErrorData = error
+        self.ExitCode = 0 if ok else 1
+
+
+def sandbox_pull(device_id: str, package: str, remote_path: str, local_dir: str, is_dir: bool):
+    """Copy a file or directory out of an app sandbox using ``run-as``.
+
+    Regular ``adb pull`` can't read ``/data/data/<pkg>/...`` as the shell user,
+    so stream the bytes through ``adb exec-out run-as <pkg> ...`` instead.
+    """
+    name = posixpath.basename(remote_path.rstrip('/')) or package
+    try:
+        os.makedirs(local_dir, exist_ok=True)
+    except OSError as error:
+        return _Result(False, error=str(error))
+
+    if is_dir:
+        parent = posixpath.dirname(remote_path.rstrip('/'))
+        cmd = [ADB_PATH, Parameter.DEVICE, device_id, Parameter.EXEC_OUT,
+               Parameter.RUN_AS, package, 'tar', '-c', '-C', parent, name]
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            with tarfile.open(fileobj=process.stdout, mode='r|') as tar:
+                _safe_extract(tar, local_dir)
+        except Exception as error:  # noqa: BLE001 - report any archive failure
+            process.stdout.close()
+            process.wait()
+            stderr = process.stderr.read().decode('utf-8', 'replace').strip()
+            return _Result(False, error=stderr or str(error))
+        process.wait()
+        if process.returncode != 0:
+            stderr = process.stderr.read().decode('utf-8', 'replace').strip()
+            return _Result(False, error=stderr or 'run-as tar failed')
+        return _Result(True, output='%s -> %s' % (remote_path, os.path.join(local_dir, name)))
+
+    destination = os.path.join(local_dir, name)
+    cmd = [ADB_PATH, Parameter.DEVICE, device_id, Parameter.EXEC_OUT,
+           Parameter.RUN_AS, package, 'toybox', 'cat', remote_path]
+    try:
+        with open(destination, 'wb') as handle:
+            process = subprocess.Popen(cmd, stdout=handle, stderr=subprocess.PIPE)
+            _, stderr = process.communicate()
+    except OSError as error:
+        return _Result(False, error=str(error))
+    if process.returncode != 0:
+        if os.path.exists(destination):
+            os.remove(destination)
+        return _Result(False, error=stderr.decode('utf-8', 'replace').strip() or 'run-as cat failed')
+    return _Result(True, output='%s -> %s' % (remote_path, destination))
+
+
+def sandbox_push(device_id: str, package: str, source_path: str, remote_dir: str):
+    """Upload a local file/dir into an app sandbox via a ``/data/local/tmp`` hop."""
+    name = os.path.basename(source_path.rstrip('/\\'))
+    staging = '/data/local/tmp/%s' % name
+    push = CommonProcess([ADB_PATH, Parameter.DEVICE, device_id, Parameter.PUSH, source_path, staging])
+    if not push.IsSuccessful:
+        return _Result(False, error=push.ErrorData or push.OutputData)
+
+    target = posixpath.join(remote_dir, name)
+    script = 'cp -r %s %s' % (shlex.quote(staging), shlex.quote(target))
+    copy = shell_run_as(device_id, package, [script])
+    CommonProcess([ADB_PATH, Parameter.DEVICE, device_id, Parameter.SHELL,
+                   'rm', '-rf', staging])
+    if not copy.IsSuccessful:
+        return _Result(False, error=copy.ErrorData or copy.OutputData)
+    return _Result(True, output='%s -> %s' % (source_path, target))
 
 
 def file_list(device_id: str, path: str):

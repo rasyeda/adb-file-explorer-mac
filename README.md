@@ -15,6 +15,10 @@ Features:
 * Connect via IP (TCP)
 * Listing / Pulling / Pushing files
 * Renaming and Deleting files
+* Browsing app-private data (`/data/data/<package>`) on non-rooted devices —
+  the package list is synthesized from `pm list packages` and each app is
+  opened with `run-as`, so it works for apps installed from a **debuggable**
+  build (same capability/limitation as Android Studio's Device Explorer)
 
 
 ## 1. Screenshots
